@@ -1,15 +1,16 @@
 FROM python:3.10-slim
 
-# Install FFmpeg and system dependencies
-RUN apt-get update && apt-get install -y ffmpeg libmagic1 && apt-get clean
-
 WORKDIR /app
+
+# Install ffmpeg (required for mutagen/qobuz-dl to handle metadata)
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Create download directory
-RUN mkdir -p downloads
+# Expose the port for the Koyeb Health Check
+EXPOSE 8000
 
 CMD ["python", "bot.py"]
