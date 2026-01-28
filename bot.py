@@ -6,6 +6,7 @@ import subprocess
 import glob
 import asyncio
 import shutil
+import json
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
@@ -13,10 +14,8 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 
 # --- 1. KOYEB HEALTH CHECK ---
 health_app = Flask(__name__)
-
 @health_app.route('/')
-def health():
-    return "Bot is healthy and running.", 200
+def health(): return "Bot is healthy.", 200
 
 def run_health_server():
     port = int(os.environ.get("PORT", 8000))
@@ -24,39 +23,43 @@ def run_health_server():
 
 # --- 2. LOGGING SETUP ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-# --- 3. CONFIGURATION ---
+# --- 3. CONFIGURATION & QOBUZ AUTH ---
 TOKEN = os.getenv("BOT_TOKEN")
+APP_ID = os.getenv("QOBUZ_APP_ID")
+APP_SECRET = os.getenv("QOBUZ_APP_SECRET")
 DOWNLOAD_DIR = "downloads"
+
+def setup_qobuz():
+    """Generates the config file qobuz-dl needs to function."""
+    config_path = os.path.expanduser("~/.config/qobuz-dl/config.json")
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    
+    config_data = {
+        "app_id": APP_ID,
+        "app_secret": APP_SECRET,
+        "download_path": DOWNLOAD_DIR,
+        "quality": 27, # 24-bit FLAC
+        "embed_art": True
+    }
+    with open(config_path, "w") as f:
+        json.dump(config_data, f)
+    logger.info("Qobuz configuration initialized.")
 
 # --- 4. HANDLERS ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Responds to /start"""
-    await update.message.reply_html(
-        "<b>🎵 Hi-Res 24-bit Downloader</b>\n"
-        "Send a Qobuz link or just type a song name to search."
-    )
+    await update.message.reply_html("<b>🎵 Hi-Res 24-bit Downloader</b>\nSend a Qobuz link or type a song name.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Processes any text (links or search terms) that isn't a command."""
     text = update.message.text
     if not text: return
-
-    # Animation: Show 'Typing' while processing input
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-    
-    # Create a button to trigger the download process
     keyboard = [[InlineKeyboardButton("📥 Download 24-bit FLAC", callback_data=text)]]
-    await update.message.reply_html(
-        f"🔍 <b>Ready to process:</b> <code>{text}</code>",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await update.message.reply_html(f"🔍 <b>Ready to process:</b> <code>{text}</code>", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_dl(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Improved downloader with buffer management and logging."""
     query = update.callback_query
     await query.answer()
     
@@ -67,28 +70,20 @@ async def handle_dl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
     try:
-        # 1. RUN WITH LOGGING (Ensures subprocess doesn't hang)
+        # Run downloader
         process = await asyncio.create_subprocess_exec(
             "qobuz-dl", "dl", url, "-q", "27", "-d", DOWNLOAD_DIR, "--embed-art",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         
-        # Read logs in real-time to prevent buffer clog
         stdout, stderr = await process.communicate()
-        
-        if stdout: logger.info(f"Qobuz-DL Output: {stdout.decode()}")
-        if stderr: logger.error(f"Qobuz-DL Error: {stderr.decode()}")
+        if stdout: logger.info(f"Output: {stdout.decode()}")
 
-        # 2. FILE SEARCH
         files = glob.glob(f"{DOWNLOAD_DIR}/**/*.flac", recursive=True)
 
         if files:
             audio_path = files[0]
-            # Update status for the user
             await status_msg.edit_text("🚀 <b>Uploading to Telegram...</b>", parse_mode='HTML')
-            
-            # Show 'Uploading' animation
             await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
 
             with open(audio_path, 'rb') as f:
@@ -97,21 +92,46 @@ async def handle_dl(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     audio=f,
                     caption="✅ <b>24-bit Studio Master</b>",
                     parse_mode='HTML',
-                    read_timeout=3600  # Give it 1 hour for huge files
+                    read_timeout=3600 
                 )
             shutil.rmtree(DOWNLOAD_DIR)
             await status_msg.delete()
         else:
-            await query.edit_message_text("❌ <b>Error:</b> Audio file not found. Check Koyeb logs for authentication or link errors.")
+            await query.edit_message_text("❌ <b>Error:</b> File not found. Check if the link is valid or if your Qobuz keys are active.")
 
     except Exception as e:
-        logger.error(f"Critical Download Error: {e}")
-        await query.edit_message_text(f"❌ <b>Crash:</b> {str(e)}", parse_mode='HTML')
+        logger.error(f"Error: {e}")
+        await query.edit_message_text(f"❌ <b>Failed:</b> {str(e)}", parse_mode='HTML')
 
-# --- 5. INITIALIZATION HOOK ---
+# --- 5. STARTUP LOGIC ---
 
-async def post_init(application):
-    """Fixes 'Conflict' errors by wiping old connections on start."""
+if __name__ == '__main__':
+    if not TOKEN:
+        logger.error("Missing BOT_TOKEN!")
+        sys.exit(1)
+
+    # Initialize Qobuz Keys & Flask
+    setup_qobuz()
+    threading.Thread(target=run_health_server, daemon=True).start()
+    
+    # Initialize Bot
+    app = ApplicationBuilder().token(TOKEN).build()
+    
+    async def bootstrap():
+        logger.info("Waiting 10s for old Koyeb sessions to die...")
+        await asyncio.sleep(10) # Prevent 409 Conflict
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Webhook cleared. Bot connection ready.")
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(bootstrap())
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(handle_dl))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    
+    logger.info("Bot is now polling...")
+    app.run_polling(drop_pending_updates=True)    """Fixes 'Conflict' errors by wiping old connections on start."""
     await application.bot.delete_webhook(drop_pending_updates=True)
     logger.info("Webhooks cleared. Bot connection established.")
 
