@@ -71,13 +71,14 @@ async def handle_dl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
     try:
+        # Run downloader
         process = await asyncio.create_subprocess_exec(
             "qobuz-dl", "dl", url, "-q", "27", "-d", DOWNLOAD_DIR, "--embed-art",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         
         stdout, stderr = await process.communicate()
-        if stdout: logger.info(f"Output: {stdout.decode()}")
+        if stdout: logger.info(f"Qobuz-DL Output: {stdout.decode()}")
 
         files = glob.glob(f"{DOWNLOAD_DIR}/**/*.flac", recursive=True)
 
@@ -110,78 +111,26 @@ if __name__ == '__main__':
         logger.error("Missing BOT_TOKEN!")
         sys.exit(1)
 
+    # 1. Initialize Qobuz configuration
     setup_qobuz()
+    
+    # 2. Start Health Server
     threading.Thread(target=run_health_server, daemon=True).start()
     
+    # 3. Setup Application
     app = ApplicationBuilder().token(TOKEN).build()
     
+    # 4. Bootstrap / Conflict Resolver
     async def bootstrap():
         logger.info("Waiting 10s for old sessions to clear...")
         await asyncio.sleep(10)
         await app.bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Bot ready.")
+        logger.info("Bot connection ready.")
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(bootstrap())
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(handle_dl))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    
-    logger.info("Bot is now polling...")
-    app.run_polling(drop_pending_updates=True)    setup_qobuz()
-    threading.Thread(target=run_health_server, daemon=True).start()
-    
-    # Initialize Bot
-    app = ApplicationBuilder().token(TOKEN).build()
-    
-    async def bootstrap():
-        logger.info("Waiting 10s for old Koyeb sessions to die...")
-        await asyncio.sleep(10) # Prevent 409 Conflict
-        await app.bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Webhook cleared. Bot connection ready.")
-
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(bootstrap())
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(handle_dl))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    
-    logger.info("Bot is now polling...")
-    app.run_polling(drop_pending_updates=True)    """Fixes 'Conflict' errors by wiping old connections on start."""
-    await application.bot.delete_webhook(drop_pending_updates=True)
-    logger.info("Webhooks cleared. Bot connection established.")
-
-# --- 6. MAIN EXECUTION ---
-
-# --- 6. MAIN EXECUTION ---
-
-if __name__ == '__main__':
-    if not TOKEN:
-        logger.error("Missing BOT_TOKEN!")
-        sys.exit(1)
-
-    # 1. Initialize Qobuz configuration (Must be before polling)
-    setup_qobuz()
-    
-    # 2. Start Flask Health Server for Koyeb
-    threading.Thread(target=run_health_server, daemon=True).start()
-    
-    # 3. Setup Telegram Application
-    app = ApplicationBuilder().token(TOKEN).build()
-    
-    # 4. Conflict Resolver & Bootstrap
-    async def bootstrap():
-        logger.info("Waiting 10s for old sessions to clear...")
-        await asyncio.sleep(10)
-        await app.bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Bot ready.")
-
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(bootstrap())
-
-    # 5. Register Handlers
+    # 5. Add Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_dl))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
