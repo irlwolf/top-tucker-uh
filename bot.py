@@ -15,7 +15,8 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 # --- 1. KOYEB HEALTH CHECK ---
 health_app = Flask(__name__)
 @health_app.route('/')
-def health(): return "Bot is healthy.", 200
+def health(): 
+    return "Bot is healthy.", 200
 
 def run_health_server():
     port = int(os.environ.get("PORT", 8000))
@@ -40,7 +41,7 @@ def setup_qobuz():
         "app_id": APP_ID,
         "app_secret": APP_SECRET,
         "download_path": DOWNLOAD_DIR,
-        "quality": 27, # 24-bit FLAC
+        "quality": 27,
         "embed_art": True
     }
     with open(config_path, "w") as f:
@@ -70,7 +71,6 @@ async def handle_dl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
     try:
-        # Run downloader
         process = await asyncio.create_subprocess_exec(
             "qobuz-dl", "dl", url, "-q", "27", "-d", DOWNLOAD_DIR, "--embed-art",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -97,21 +97,39 @@ async def handle_dl(update: Update, context: ContextTypes.DEFAULT_TYPE):
             shutil.rmtree(DOWNLOAD_DIR)
             await status_msg.delete()
         else:
-            await query.edit_message_text("❌ <b>Error:</b> File not found. Check if the link is valid or if your Qobuz keys are active.")
+            await query.edit_message_text("❌ <b>Error:</b> File not found. Verify your Qobuz keys.")
 
     except Exception as e:
         logger.error(f"Error: {e}")
         await query.edit_message_text(f"❌ <b>Failed:</b> {str(e)}", parse_mode='HTML')
 
-# --- 5. STARTUP LOGIC ---
+# --- 5. MAIN EXECUTION ---
 
 if __name__ == '__main__':
     if not TOKEN:
         logger.error("Missing BOT_TOKEN!")
         sys.exit(1)
 
-    # Initialize Qobuz Keys & Flask
     setup_qobuz()
+    threading.Thread(target=run_health_server, daemon=True).start()
+    
+    app = ApplicationBuilder().token(TOKEN).build()
+    
+    async def bootstrap():
+        logger.info("Waiting 10s for old sessions to clear...")
+        await asyncio.sleep(10)
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Bot ready.")
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(bootstrap())
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(handle_dl))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    
+    logger.info("Bot is now polling...")
+    app.run_polling(drop_pending_updates=True)    setup_qobuz()
     threading.Thread(target=run_health_server, daemon=True).start()
     
     # Initialize Bot
