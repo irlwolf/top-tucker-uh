@@ -9,6 +9,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+# This line hides those long URLs with your token
+logging.getLogger("httpx").setLevel(logging.WARNING) 
+
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION ---
