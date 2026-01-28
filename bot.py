@@ -119,19 +119,33 @@ async def post_init(application):
 
 if __name__ == '__main__':
     if not TOKEN:
-        logger.error("Missing BOT_TOKEN in environment variables!")
+        logger.error("Missing BOT_TOKEN!")
         sys.exit(1)
 
-    # Start Flask (Koyeb Health Check) in background thread
+    # Start Flask Health Server
     threading.Thread(target=run_health_server, daemon=True).start()
     
     # Setup Telegram Application
-    app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
+    app = ApplicationBuilder().token(TOKEN).build()
     
+    # --- ENHANCED CONFLICT RESOLVER ---
+    async def final_bootstrap():
+        # 1. Wait for old Koyeb instances to shut down
+        logger.info("Waiting 15 seconds for old sessions to clear...")
+        await asyncio.sleep(15) 
+        
+        # 2. Force delete any webhooks
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Webhooks cleared. Bot connection established.")
+
+    # Run the bootstrap
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(final_bootstrap())
+
     # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_dl))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
-    logger.info("Bot is polling...")
+    logger.info("Polling started...")
     app.run_polling(drop_pending_updates=True)
