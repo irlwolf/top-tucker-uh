@@ -116,3 +116,26 @@ if __name__ == '__main__':
     # drop_pending_updates=True clears old conflict errors on start
     # stop_signals are handled automatically by run_polling
     app.run_polling(drop_pending_updates=True)
+
+if __name__ == '__main__':
+    if not TOKEN:
+        logger.error("Missing BOT_TOKEN!")
+        sys.exit(1)
+
+    # Start health server thread
+    threading.Thread(target=run_health_server, daemon=True).start()
+    
+    # Initialize Bot
+    app = ApplicationBuilder().token(TOKEN).build()
+    
+    # --- ADD THIS LINE TO FIX NO RESPONSE ---
+    # This force-clears any stuck webhooks before starting polling
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(handle_dl))
+    
+    logger.info("Bot is running and updates are cleared...")
+    app.run_polling()
