@@ -11,7 +11,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# --- 1. KOYEB HEALTH CHECK (Essential for Free Tier) ---
+# --- 1. KOYEB HEALTH CHECK ---
 health_app = Flask(__name__)
 
 @health_app.route('/')
@@ -56,54 +56,62 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_dl(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """The heavy lifting: downloading and sending audio."""
+    """Improved downloader with buffer management and logging."""
     query = update.callback_query
     await query.answer()
     
-    url_or_name = query.data 
+    url = query.data 
     status_msg = await query.edit_message_text("📥 <b>Fetching Hi-Res Audio...</b>", parse_mode='HTML')
 
-    # Ensure clean directory for every task
     if os.path.exists(DOWNLOAD_DIR): shutil.rmtree(DOWNLOAD_DIR)
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
     try:
-        # Animation: Show 'Uploading' for large files
-        await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
-
-        # Run qobuz-dl asynchronously
+        # 1. RUN WITH LOGGING (Ensures subprocess doesn't hang)
         process = await asyncio.create_subprocess_exec(
-            "qobuz-dl", "dl", url_or_name, "-q", "27", "-d", DOWNLOAD_DIR, "--embed-art",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            "qobuz-dl", "dl", url, "-q", "27", "-d", DOWNLOAD_DIR, "--embed-art",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
-        await process.communicate()
+        
+        # Read logs in real-time to prevent buffer clog
+        stdout, stderr = await process.communicate()
+        
+        if stdout: logger.info(f"Qobuz-DL Output: {stdout.decode()}")
+        if stderr: logger.error(f"Qobuz-DL Error: {stderr.decode()}")
 
-        # Find the .flac file (searching subfolders)
+        # 2. FILE SEARCH
         files = glob.glob(f"{DOWNLOAD_DIR}/**/*.flac", recursive=True)
 
         if files:
             audio_path = files[0]
+            # Update status for the user
+            await status_msg.edit_text("🚀 <b>Uploading to Telegram...</b>", parse_mode='HTML')
+            
+            # Show 'Uploading' animation
+            await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
+
             with open(audio_path, 'rb') as f:
                 await context.bot.send_audio(
                     chat_id=query.message.chat_id,
                     audio=f,
                     caption="✅ <b>24-bit Studio Master</b>",
                     parse_mode='HTML',
-                    read_timeout=3000 # Critical for large 24-bit files
+                    read_timeout=3600  # Give it 1 hour for huge files
                 )
-            shutil.rmtree(DOWNLOAD_DIR) # Clean space
+            shutil.rmtree(DOWNLOAD_DIR)
             await status_msg.delete()
         else:
-            await query.edit_message_text("❌ Error: Audio file not found. Check the link/name.")
+            await query.edit_message_text("❌ <b>Error:</b> Audio file not found. Check Koyeb logs for authentication or link errors.")
 
     except Exception as e:
-        logger.error(f"Download error: {e}")
-        await query.edit_message_text(f"❌ <b>Failed:</b> {str(e)}", parse_mode='HTML')
+        logger.error(f"Critical Download Error: {e}")
+        await query.edit_message_text(f"❌ <b>Crash:</b> {str(e)}", parse_mode='HTML')
 
 # --- 5. INITIALIZATION HOOK ---
 
 async def post_init(application):
-    """Fixes the 'Conflict' and 'No Response' errors on startup."""
+    """Fixes 'Conflict' errors by wiping old connections on start."""
     await application.bot.delete_webhook(drop_pending_updates=True)
     logger.info("Webhooks cleared. Bot connection established.")
 
@@ -114,7 +122,7 @@ if __name__ == '__main__':
         logger.error("Missing BOT_TOKEN in environment variables!")
         sys.exit(1)
 
-    # Start Flask (Koyeb Health Check) in a background thread
+    # Start Flask (Koyeb Health Check) in background thread
     threading.Thread(target=run_health_server, daemon=True).start()
     
     # Setup Telegram Application
@@ -123,7 +131,6 @@ if __name__ == '__main__':
     # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_dl))
-    # This handler catches all text messages (links or search names)
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
     logger.info("Bot is polling...")
