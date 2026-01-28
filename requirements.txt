@@ -1,7 +1,9 @@
-python-telegram-bot==22.6
-httpx>=0.28.0
-uvloop>=0.20.0; sys_platform != 'win32'
-sqlalchemy>=2.0.46
-mutagen>=1.47.0
-qobuz-dl>=0.9.9.9
-python-dotenv>=1.0.1
+flask
+gunicorn
+python-telegram-bot[webhooks]
+qobuz-dl
+mutagen
+ffmpeg-python
+sqlalchemy
+python-dotenv
+httpx
